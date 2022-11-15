@@ -45,11 +45,21 @@ String fully_qualified(CXCursor Cursor) {
 struct ClassDef {
     String strName;
     String strNamespace;
-    String strFile;
+    SourceLocation srcLoc;
     int64_t nSize;
+    std::vector<String> vecBaseClasses;
+};
+struct FunctionDef {
+    String strName;
+    String strNamespace;
+    SourceLocation srcLoc;
+    int64_t nStatic;
+    String strSig;
+    String strReturnType;
+    std::vector<String> vecParams;
 };
 
-int ProcessClass(CXCursor Cursor, ClassDef& classDef) {
+int ProcessClassName(CXCursor Cursor, ClassDef& classDef) {
     CXCursor td_def = clang_getCursorDefinition(Cursor);
     if (clang_Cursor_isNull(td_def)) {
         return 1;
@@ -62,56 +72,51 @@ int ProcessClass(CXCursor Cursor, ClassDef& classDef) {
         fqn = classDef.strNamespace + "::" + fqn;
     }
     classDef.strName = fqn;
-    classDef.strFile = GetCursorSourcefile(Cursor);
-    classDef.nSize = clang_Type_getSizeOf(clang_getCursorType(Cursor));
+    classDef.srcLoc = GetCursorSourceLocation(Cursor);
     clang_disposeString(typeName_cx);
     return 0;
 }
 
-void PrintClassDef(const ClassDef& classDef) {
-    printf("name: '%s', namespace: '%s', file: '%s', size: %zd\n",
-        classDef.strName.c_str(), classDef.strNamespace.c_str(), classDef.strFile.c_str(), classDef.nSize);
+int ProcessClassDef(CXCursor Cursor, ClassDef& classDef) {
+    classDef.nSize = clang_Type_getSizeOf(clang_getCursorType(Cursor));
+    std::vector <String> vecBaseClasses;
+    CXCursorVisitor visitor = [](CXCursor cursor, CXCursor parent, CXClientData client_data) -> CXChildVisitResult {
+        auto kind = clang_getCursorKind(cursor);
+        if (kind == CXCursor_CXXBaseSpecifier) {
+            auto base = clang_getCursorReferenced(cursor);
+            auto baseName_cx = clang_getCursorSpelling(base);
+            String baseName = clang_getCString(baseName_cx);
+            auto baseNamespace = fully_qualified(clang_getCursorSemanticParent(base));
+            auto fqn = baseName;
+            if (baseNamespace != "") {
+                fqn = baseNamespace + "::" + fqn;
+            }
+            auto vecBaseClasses = static_cast<std::vector <String> *>(client_data);
+            vecBaseClasses->push_back(fqn);
+            clang_disposeString(baseName_cx);
+        }
+        return CXChildVisit_Continue;
+    };
+    clang_visitChildren(Cursor, visitor, &classDef.vecBaseClasses);
+    return 0;
 }
-// def processFunction(cursor):
-//     bstatic = cursor.is_static_method()
-//     # args = cursor.get_arguments()
-//     # tokens = cursor.get_tokens()
-//     return_type = cursor.result_type.spelling
-//     namespace = fully_qualified(cursor.semantic_parent)
-//     name = cursor.spelling
-//     fqn = name
-//     if namespace != '':
-//         fqn = namespace + '::' + fqn
-//     params = []
-//     for childCursor in cursor.get_children():
-//         if childCursor.kind == cindex.CursorKind.PARM_DECL:
-//             params.append({'name': childCursor.spelling, 'type': childCursor.type.spelling})
-//     funcSig = f'{return_type} {fqn}('
-//     params = [f'{p["type"]} {p["name"]}' for p in params]
-//     funcSig += ', '.join(params)
-//     funcSig += ')'
-//     return fqn, {
-//         "name": fqn,
-//         "namespace": namespace,
-//         "file": cursor.location.file.name,
-//         "static": 1 if bstatic else 0,
-//         "sig": funcSig,
-//         "return_type": return_type,
-//         "params": params,
-//     }
-struct FunctionDef {
-    String strName;
-    String strNamespace;
-    String strFile;
-    int64_t nStatic;
-    String strSig;
-    String strReturnType;
-    std::vector<String> vecParams;
-};
+
+void PrintClassDef(const ClassDef& classDef) {
+    // if (classDef.vecBaseClasses.empty())
+    //     return;
+    printf("name: '%s', namespace: '%s', location: '%s', size: %zd\n",
+        classDef.strName.c_str(), classDef.strNamespace.c_str(), classDef.srcLoc.c_str(), classDef.nSize);
+    printf("name: '%s' has %zu base classes:", classDef.strName.c_str(), classDef.vecBaseClasses.size());
+    for (auto& base : classDef.vecBaseClasses) {
+        printf(" '%s'", base.c_str());
+    }
+    printf("\n----\n");
+}
+
 enum CXChildVisitResult FunctionVisitor(CXCursor Cursor,
                                         CXCursor Parent,
                                         CXClientData ClientData) {
-    FunctionDef* pFuncDef = (FunctionDef*)ClientData;
+    auto pFuncDef = static_cast<FunctionDef*>(ClientData);
     if (clang_getCursorKind(Cursor) == CXCursor_ParmDecl) {
         auto paramType = clang_getCursorType(Cursor);
         auto paramTypename_cx = clang_getTypeSpelling(paramType);
@@ -135,7 +140,7 @@ int ProcessFunction(CXCursor Cursor, FunctionDef& classDef) {
         fqn = classDef.strNamespace + "::" + fqn;
     }
     classDef.strName = fqn;
-    classDef.strFile = GetCursorSourcefile(Cursor);
+    classDef.srcLoc = GetCursorSourceLocation(Cursor);
     classDef.nStatic = clang_CXXMethod_isStatic(Cursor);
     auto resultType = clang_getCursorResultType(Cursor);
     auto resultTypename_cx = clang_getTypeSpelling(resultType);
@@ -156,8 +161,8 @@ int ProcessFunction(CXCursor Cursor, FunctionDef& classDef) {
     return 0;
 }
 void PrintFunction(const FunctionDef& funcDef) {
-    printf("name: '%s', namespace: '%s', file: '%s', static: %zd, sig: '%s', return_type: '%s', params: %zu\n",
-        funcDef.strName.c_str(), funcDef.strNamespace.c_str(), funcDef.strFile.c_str(), funcDef.nStatic, funcDef.strSig.c_str(), funcDef.strReturnType.c_str(), funcDef.vecParams.size());
+    printf("name: '%s', namespace: '%s', location: '%s', static: %zd, sig: '%s', return_type: '%s', params: %zu\n",
+        funcDef.strName.c_str(), funcDef.strNamespace.c_str(), funcDef.srcLoc.c_str(), funcDef.nStatic, funcDef.strSig.c_str(), funcDef.strReturnType.c_str(), funcDef.vecParams.size());
 }
 /* Data used by the visitor */
 using VisitorData = struct {
@@ -181,13 +186,13 @@ void WriteCsvFile(const VisitorData& UserData, const String& PathFileOut) {
             fprintf(stderr, "Failed to open file '%s' for writing\n", fileOutFunc.c_str());
             return;
         }
-        fprintf(fp, "name,namespace,file,static,sig,return_type,params\n");
+        fprintf(fp, "name,namespace,file,location,static,sig,return_type,params\n");
         std::sort(vecFuncDefs.begin(), vecFuncDefs.end(), [](const auto& a, const auto& b) {
             return a.first < b.first;
         });
         for (auto& [name, funcDef] : vecFuncDefs) {
-            fprintf(fp, "\"%s\",\"%s\",\"%s\",%zd,\"%s\",\"%s\",%zu\n",
-                funcDef.strName.c_str(), funcDef.strNamespace.c_str(), funcDef.strFile.c_str(), funcDef.nStatic, funcDef.strSig.c_str(), funcDef.strReturnType.c_str(), funcDef.vecParams.size());
+            fprintf(fp, "\"%s\",\"%s\",\"%s\",\"%s\",%zd,\"%s\",\"%s\",%zu\n",
+                funcDef.strName.c_str(), funcDef.strNamespace.c_str(), funcDef.srcLoc.file.c_str(), funcDef.srcLoc.line_col_offset_c_str(), funcDef.nStatic, funcDef.strSig.c_str(), funcDef.strReturnType.c_str(), funcDef.vecParams.size());
         }
         fclose(fp);
     }
@@ -197,13 +202,21 @@ void WriteCsvFile(const VisitorData& UserData, const String& PathFileOut) {
             fprintf(stderr, "Failed to open file '%s' for writing\n", fileOutClass.c_str());
             return;
         }
-        fprintf(fp, "name,namespace,file,size\n");
+        fprintf(fp, "name,namespace,baseclasses,file,location,size\n");
         std::sort(vecClassDefs.begin(), vecClassDefs.end(), [](const auto& a, const auto& b) {
             return a.first < b.first;
         });
+        
         for (auto& [name, classDef] : vecClassDefs) {
-            fprintf(fp, "\"%s\",\"%s\",\"%s\",%zu\n",
-                classDef.strName.c_str(), classDef.strNamespace.c_str(), classDef.strFile.c_str(), classDef.nSize);
+            String baseClasses = "";
+            for (auto& baseClass : classDef.vecBaseClasses) {
+                baseClasses += baseClass;
+                if (&baseClass != &classDef.vecBaseClasses.back()) {
+                    baseClasses += ";";
+                }
+            }
+            fprintf(fp, "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%zu\n",
+                classDef.strName.c_str(), classDef.strNamespace.c_str(), baseClasses.c_str(), classDef.srcLoc.file.c_str(), classDef.srcLoc.line_col_offset_c_str(), classDef.nSize);
         }
         fclose(fp);
     }
@@ -211,6 +224,10 @@ void WriteCsvFile(const VisitorData& UserData, const String& PathFileOut) {
 enum CXChildVisitResult ClassAndFunctionVisitor(CXCursor Cursor,
                                                 CXCursor Parent,
                                                 CXClientData ClientData) {
+    // check if we deal with a forward declaration
+    if (clang_isCursorDefinition(Cursor) == 0) {
+        return CXChildVisit_Continue;
+    }
     CXSourceLocation Loc = clang_getCursorLocation(Cursor);
     CXFile file{};
     clang_getExpansionLocation(Loc, &file, nullptr, nullptr, nullptr);
@@ -236,25 +253,22 @@ enum CXChildVisitResult ClassAndFunctionVisitor(CXCursor Cursor,
         Cursor.kind == CXCursor_UnionDecl ||
         Cursor.kind == CXCursor_TypedefDecl */) {
         ClassDef c{};
-        if (0 == ProcessClass(Cursor, c)) {
-            // PrintClassDef(c);
+        if (0 == ProcessClassName(Cursor, c)) {
             // remove srcpath from c.strFile if strFile starts with srcpath
-            if (UserData->szSrcPath && !std::strncmp(c.strFile.c_str(), UserData->szSrcPath, std::strlen(UserData->szSrcPath))) {
-                c.strFile = c.strFile.substr(std::strlen(UserData->szSrcPath));
-                if (c.strFile[0] == '/') {
-                    c.strFile = c.strFile.substr(1);
+            if (UserData->szSrcPath && !std::strncmp(c.srcLoc.file.c_str(), UserData->szSrcPath, std::strlen(UserData->szSrcPath))) {
+                c.srcLoc.file = c.srcLoc.file.substr(std::strlen(UserData->szSrcPath));
+                if (c.srcLoc.file[0] == '/') {
+                    c.srcLoc.file = c.srcLoc.file.substr(1);
                 }
             }
+            ProcessClassDef(Cursor, c);
             auto it = UserData->VecClassDefs.find(c.strName);
-            if (it != UserData->VecClassDefs.end()) {
-                if (it->second.nSize < c.nSize) {
-                    it->second = c;
-                }
-            } else {
+            if (it == UserData->VecClassDefs.end() || it->second.nSize <= 0) {
+                if (c.vecBaseClasses.size()) PrintClassDef(c);
                 UserData->VecClassDefs[c.strName] = c;
             }
         }
-        return CXChildVisit_Continue;
+        return CXChildVisit_Recurse;
     }
     if (Cursor.kind == CXCursor_FunctionDecl ||
         Cursor.kind == CXCursor_FunctionTemplate) {
@@ -262,15 +276,15 @@ enum CXChildVisitResult ClassAndFunctionVisitor(CXCursor Cursor,
         if (0 == ProcessFunction(Cursor, f)) {
             // PrintFunction(f);
             // remove srcpath from c.strFile if strFile starts with srcpath
-            if (UserData->szSrcPath && !std::strncmp(f.strFile.c_str(), UserData->szSrcPath, std::strlen(UserData->szSrcPath))) {
-                f.strFile = f.strFile.substr(std::strlen(UserData->szSrcPath));
-                if (f.strFile[0] == '/') {
-                    f.strFile = f.strFile.substr(1);
+            if (UserData->szSrcPath && !std::strncmp(f.srcLoc.file.c_str(), UserData->szSrcPath, std::strlen(UserData->szSrcPath))) {
+                f.srcLoc.file = f.srcLoc.file.substr(std::strlen(UserData->szSrcPath));
+                if (f.srcLoc.file[0] == '/') {
+                    f.srcLoc.file = f.srcLoc.file.substr(1);
                 }
             }
             UserData->VecFuncDefs[f.strName] = f;
         }
-        return CXChildVisit_Continue;
+        return CXChildVisit_Recurse;
     }
     return CXChildVisit_Recurse;
 
@@ -377,6 +391,10 @@ int main(int argc, char* argv[]) {
         }
         CXString cxString = clang_CompileCommand_getFilename(CCmd);
         auto cStringFilename = clang_getCString(cxString);
+        // if (!std::strstr(cStringFilename, "host.cpp")) {
+        //     clang_disposeString(cxString);
+        //     continue;
+        // }
         printf("Indexing file %d of %d (%s)\n", i + 1, numCommands, cStringFilename);
         // printf("Args: ");
         for (unsigned a = 0; a < numArgs; ++a) {
