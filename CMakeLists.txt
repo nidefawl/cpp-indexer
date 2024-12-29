@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 
-set(LIBCLANG_LLVM_CONFIG_EXECUTABLE "/data/dev/llvm-install-nounwinder4/bin/llvm-config")
+set(LIBCLANG_LLVM_CONFIG_EXECUTABLE "/opt/clang/latest/bin/llvm-config")
 if (NOT LIBCLANG_CXXFLAGS)
     if (NOT LIBCLANG_LLVM_CONFIG_EXECUTABLE)
         message(FATAL_ERROR "Could NOT find llvm-config executable and LIBCLANG_CXXFLAGS is not set ")

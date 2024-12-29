@@ -2,14 +2,15 @@
 #include <cstdio>
 #include <string>
 #include <unistd.h>
+#include <limits.h>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "Usage: %s <builddir> <srcpath> [csvpath]\n", argv[0]);
         // return 1;
     }
-    std::string buildDir = argc > 1 ? argv[1] : "/data/dev/daw/build";
-    std::string srcPath = argc > 2 ? argv[2] : "/data/dev/daw/src";
+    std::string buildDir = argc > 1 ? argv[1] : "./build";
+    std::string srcPath = argc > 2 ? argv[2] : "./src";
     std::string outFilePath = argc > 3 ? argv[3] : "";
     auto cwd = getcwd(nullptr, 0);
     if (outFilePath.empty() && cwd) {

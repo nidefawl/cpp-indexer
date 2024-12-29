@@ -12,8 +12,10 @@
 #include <cstring>
 #include <cctype>
 #include <map>
+#include <algorithm>
 #include <string>
 #include <vector>
+#include <array>
 #ifdef _WIN32
 #include <direct.h>
 #else
